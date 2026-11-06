@@ -88,7 +88,7 @@ export function shopActive() {
 let _genChain = Promise.resolve();
 export function generateCategory(catId, onStatus) {
     const owner=getMeta();
-    const run = () => {if(getMeta()!==owner)throw new Error('Чат изменился');return _generateCategory(catId, onStatus);};
+    const run = () => {if(getMeta()!==owner)throw new Error('The active chat changed');return _generateCategory(catId, onStatus);};
     const p = _genChain.then(run, run);
     _genChain = p.then(() => {}, () => {});
     return p;
@@ -97,15 +97,15 @@ export function generateCategory(catId, onStatus) {
 async function _generateCategory(catId, onStatus) {
     const owner=getMeta();
     const cat = catById(catId);
-    if (!cat) throw new Error('Неизвестная категория');
-    onStatus?.('Загружаю каталог...');
+    if (!cat) throw new Error('Unknown shop category');
+    onStatus?.('Loading catalog...');
     const currency = getBank().currency;
     const arr = await generateShopContent(cat.name, cat.hint, currency);
-    if(getMeta()!==owner)throw new Error('Чат изменился');
-    if (!Array.isArray(arr) || arr.length === 0) throw new Error('Каталог не сгенерировался — попробуй ещё раз');
+    if(getMeta()!==owner)throw new Error('The active chat changed');
+    if (!Array.isArray(arr) || arr.length === 0) throw new Error('No shop catalog generated. Try again.');
     const stores = arr.map(st => ({
         id: genId(),
-        name: String(st.store || 'Магазин').slice(0, 50),
+        name: String(st.store || 'Store').slice(0, 50),
         items: (Array.isArray(st.items) ? st.items : []).filter(it => it && it.name).slice(0, 10).map(it => ({
             id: genId(),
             name: String(it.name).slice(0, 70),
@@ -113,7 +113,7 @@ async function _generateCategory(catId, onStatus) {
             desc: String(it.desc || '').slice(0, 160),
         })),
     })).filter(st => st.items.length > 0);
-    if (stores.length === 0) throw new Error('Пустой каталог');
+    if (stores.length === 0) throw new Error('The generated catalog was empty');
     getShop().cats[catId] = { stores, at: Date.now() };
     saveMeta();
     return stores;
@@ -341,15 +341,17 @@ export function findOrder(id) { return getShop().orders.find(o => o.id === id) |
 let _courierBusy = new Set();
 
 // Назначить курьера и получить от него первое сообщение. Идемпотентна.
-export async function ensureCourier(orderId) {
+export async function ensureCourier(orderId, { userInitiated = false } = {}) {
+    const owner = getMeta();
     const o = findOrder(orderId);
     if (!o || o.courier) return o?.courier || null;
     if (_courierBusy.has(orderId)) return null;
     _courierBusy.add(orderId);
     try {
         // Курьера могут назначить ещё на сборке — тогда и пишет он про сборку
-        const c = await generateCourier(o, fmtEta(orderLeft(o)), o.stage === 'placed');
-        // За время запроса заказ мог быть удалён
+        const c = await generateCourier(o, fmtEta(orderLeft(o)), o.stage === 'placed', userInitiated);
+        // A different chat cannot receive a courier from the previous chat.
+        if (getMeta() !== owner) return null;
         const cur = findOrder(orderId);
         if (!cur) return null;
         cur.courier = { name: c.name };
@@ -378,6 +380,7 @@ export function markCourierRead(orderId) {
 
 // Её сообщение курьеру + его ответ
 export async function writeToCourier(orderId, text) {
+    const owner = getMeta();
     const o = findOrder(orderId);
     text = String(text || '').trim();
     if (!o || !o.courier || !text) return null;
@@ -387,12 +390,31 @@ export async function writeToCourier(orderId, text) {
     try {
         logSocialToChat(`${getUserName()} пишет курьеру ${o.courier.name}: «${text}»`);
     } catch (e) { /* ignore */ }
-    const reply = await generateCourierReply(o, o.courier, o.chat, text);
+    const reply = await generateCourierReply(o, o.courier, o.chat, text, false, true);
+    if (getMeta() !== owner) return null;
     const cur = findOrder(orderId);
     if (!cur) return null;
     cur.chat = orderChat(cur);
     cur.chat.push({ text: reply, ts: Date.now() });
     saveMeta();
+    return reply;
+}
+
+// Retry a failed reply without repeating the user's already-saved message.
+export async function retryCourierReply(orderId) {
+    const owner = getMeta();
+    const o = findOrder(orderId);
+    const chat = orderChat(o);
+    const last = chat[chat.length - 1];
+    if (!o?.courier || !last?.user) return null;
+    const reply = await generateCourierReply(o, o.courier, chat, last.text, false, true);
+    if (getMeta() !== owner) return null;
+    const cur = findOrder(orderId);
+    if (!cur) return null;
+    if (orderChat(cur).at(-1)?.user) {
+        cur.chat.push({ text: reply, ts: Date.now() });
+        saveMeta();
+    }
     return reply;
 }
 

@@ -49,18 +49,18 @@ function formatCard(fields,recipient){
     return '=== '+(recipient?'RECIPIENT CHARACTER CARD':'CURRENT ROLEPLAY CHARACTER CARD — background, not necessarily the recipient')+' '+JSON.stringify(fields.name)+' ===\n'+
         sections.filter(([,text])=>text).map(([label,text,budget])=>label+':\n'+clip(text,budget)).join('\n\n');
 }
-function recentHistory(ctx,{publicOnly=false}={}){
+function recentHistory(ctx,{publicOnly=false,maxMessages=40,maxChars=26000,maxMessageChars=6500}={}){
     const rows=[];
     for(const message of ctx.chat||[]){
         if(publicOnly&&!publicRoleplayMessage(message))continue;
         const text=plain(privateRoleplayText(message));if(!text)continue;
         rows.push({speaker:message.is_user?(ctx.name1||'User'):(message.name||ctx.name2||'Character'),text});
     }
-    const chosen=[];let remaining=26000;
-    for(const row of rows.slice(-40).reverse()){
+    const chosen=[];let remaining=maxChars;
+    for(const row of rows.slice(-maxMessages).reverse()){
         const prefix=row.speaker+': ';
         if(remaining<prefix.length+120)break;
-        const text=clip(row.text,Math.min(6500,remaining-prefix.length-2));
+        const text=clip(row.text,Math.min(maxMessageChars,remaining-prefix.length-2));
         chosen.unshift(prefix+text);remaining-=prefix.length+text.length+2;
     }
     return {count:chosen.length,text:chosen.join('\n\n'),messages:chosen};
@@ -103,7 +103,15 @@ export async function buildPhoneConversationContext(contact,{medium='call',trans
     check();
     const original=contactOriginalName(key,contact.originalName||contact.name),label=thread?.name||contact.name||original;
     const items=characterCards(ctx,key,participants),cards=items.map(item=>({item,fields:fieldsFor(ctx,item)}));
-    const sub=text=>substitute(ctx,text,ctx.name2||original),history=recentHistory(ctx,{publicOnly}),summary=memory(ctx);
+    // Public/social catalog work does not need the same transcript size as a
+    // private character conversation. Preserve rich context for SMS and calls.
+    const socialBudget = medium === 'social';
+    const history = recentHistory(ctx, { publicOnly,
+        maxMessages: socialBudget ? 20 : 40,
+        maxChars: socialBudget ? 14000 : 26000,
+        maxMessageChars: socialBudget ? 2000 : 6500
+    });
+    const sub=text=>substitute(ctx,text,ctx.name2||original),summary=memory(ctx);
     let persona='';
     try{persona=ctx.getCharacterCardFields?.()?.persona||ctx.powerUserSettings?.persona_description||sub('{{persona}}');}catch{persona=ctx.powerUserSettings?.persona_description||'';}
     if(persona==='{{persona}}')persona='';

@@ -5,6 +5,7 @@ import { rpToday } from './plans.js';
 import { isPhoneAppInstalled, phoneAppForThread } from './state.js';
 import { phonePlatformApp } from './phone-apps.js';
 import { normalizePhoneSpaces, parsePhoneJson } from './phone-text.js';
+import { phoneOutputLimit } from './phone-budget.js';
 import { buildPhoneCallContext, buildPhoneConversationContext } from './call-context.js';
 import { generateRaw, generateRawData, user_avatar, getThumbnailUrl, saveSettingsDebounced } from '../../../../script.js';
 import { saveBase64AsFile } from '../../../utils.js';
@@ -1255,17 +1256,22 @@ async function profileRequest(profileId, messages, maxTokens, requireComplete = 
 const _noPrefill = new Set();
 
 function socialTokenLimit(requested = 1024) {
-    const taskLimit = Math.max(1, Math.min(32000, Math.trunc(Number(requested)) || 1024));
-    const configured = Math.max(0, Math.min(32000, parseInt(getSettings().socialMaxTokens) || 0));
-    return configured ? Math.min(taskLimit, configured) : taskLimit;
+    const st = getSettings();
+    return phoneOutputLimit(requested, st.socialThinkingHeadroom, st.socialMaxTokens);
 }
 
-async function socialGen(prompt, { maxTokens = 1024, image = null, prefill = '', app = null, calendarTask = false, setupTask = false, requireComplete = false } = {}) {
+async function socialGen(prompt, { maxTokens = 1024, image = null, prefill = '', app = null, calendarTask = false, setupTask = false, requireComplete = false, manualTask = false } = {}) {
     const st = getSettings();
     const activityVersion = st.phoneActivityVersion;
     const checkActivity = () => {
-        const tracking=(calendarTask&&app==='calendar'||setupTask)&&getSettings().isEnabled!==false&&activityVersion===getSettings().phoneActivityVersion;
-        if ((tracking || phoneActivityAllowed(activityVersion)) && (!app || isPhoneAppInstalled(app))) return;
+        const settings = getSettings();
+        const tracking = (calendarTask && app === 'calendar' || setupTask)
+            && settings.isEnabled !== false && activityVersion === settings.phoneActivityVersion;
+        // Explicit taps can run in Quiet Mode, while unsolicited background
+        // events remain suppressed. Chat changes still cancel stale requests.
+        const manual = manualTask && settings.isEnabled !== false
+            && activityVersion === settings.phoneActivityVersion;
+        if ((tracking || manual || phoneActivityAllowed(activityVersion)) && (!app || isPhoneAppInstalled(app))) return;
         const error = new Error('Активность телефона отменена или приложение удалено.');
         error.name = 'AbortError';
         throw error;
@@ -1537,11 +1543,11 @@ function parseJsonObject(raw) {
 // ответ обрывается на середине. Пустой разбор — один повтор с двойным лимитом.
 async function socialGenArray(prompt, opts = {}) {
     const array = parseJsonArray(await socialGen(prompt, opts));
-    // An empty array can be a valid "no reply" result; retry only malformed output.
-    if (Array.isArray(array)) return array;
-    const previous = socialTokenLimit(opts.maxTokens || 1024);
-    const bigger = socialTokenLimit(Math.min(8192, previous * 2));
-    logReq('повтор (не удалось прочитать JSON)', `max ${bigger}`);
+    // Some tasks legitimately return [], but courier/catalog generation must not.
+    if (Array.isArray(array) && (!opts.requireItems || array.length)) return array;
+    const previous = Math.max(1, Number(opts.maxTokens) || 1024);
+    const bigger = Math.min(16000, Math.max(previous * 2, previous + 512));
+    logReq('Retry empty/invalid JSON response', `task ${previous} → ${bigger}`);
     return parseJsonArray(await socialGen(prompt, { ...opts, maxTokens: bigger }));
 }
 
@@ -1586,10 +1592,13 @@ function contactsBlock() {
 }
 
 // Общая шапка задачи. rich: карточка+персона+лорбук+история; lite: только срез чата.
-async function taskHeader(what, { publicOnly = false, contactNames = [], brief = false, focus = '' } = {}) {
+async function taskHeader(what, { publicOnly = false, contactNames = [], brief = false, focus = '', manualTask = false } = {}) {
     const activityVersion = getSettings().phoneActivityVersion;
     const checkActivity = () => {
-        if (!phoneActivityAllowed(activityVersion)) throw Object.assign(new Error('Запрос телефона отменён'), {name:'AbortError'});
+        const st = getSettings();
+        const permitted = phoneActivityAllowed(activityVersion) || (manualTask
+            && st.isEnabled !== false && st.phoneActivityVersion === activityVersion);
+        if (!permitted) throw Object.assign(new Error('Phone request cancelled'), {name:'AbortError'});
     };
     checkActivity();
     const rich = !brief && getSettings().socialContextMode !== 'lite';
@@ -1602,7 +1611,7 @@ async function taskHeader(what, { publicOnly = false, contactNames = [], brief =
         blocks.push(await buildPhoneConversationContext({name:participants[0] || mainCharName() || 'App task'},
             {medium:'social',includeSms:false,participants,publicOnly,utterance:what+'\n'+focus}));
     } else {
-        const history = rpContextBlock(brief ? 3 : 12, { publicOnly });
+        const history = rpContextBlock(brief ? 6 : 12, { publicOnly });
         if (history) blocks.push('RECENT STORY:\n' + history);
     }
     const clock = getRpDateTime();
@@ -1913,14 +1922,14 @@ export async function generateShopContent(catLabel, catHint, currency) {
         const EN_CAT = {'Доставка еды':'Food delivery','Продукты':'Groceries','Одежда':'Clothing','Косметика':'Beauty and cosmetics','Детские товары':'Kids and baby goods','Бытовая техника':'Home appliances and electronics','Ювелирка':'Jewelry','Мебель':'Furniture','Itemы для дома':'Home goods','Секс-шоп':'Adult store','Отели':'Hotels','Тур-агенство':'Travel agency'};
         catLabel = EN_CAT[catLabel] || catLabel;
     }
-    const prompt = `${await taskHeader(`generate an online shopping catalog for the "${catLabel}" category on ${getUserName()}'s phone.`)}
+    const prompt = `${await taskHeader(`generate an online shopping catalog for the "${catLabel}" category on ${getUserName()}'s phone.`, { brief: true, manualTask: true })}
 Match the CITY / COUNTRY / SETTING of the roleplay — local brands, style, realistic price level in ${currency}. If the setting is fantasy/other-world, invent fitting shops.
 ${catHint}
 Generate 2-4 realistic stores/vendors, each with 4-7 items. "price" is a plain integer number in ${currency} (no sign, no text). Short vivid item descriptions (5-12 words). NO emojis.
 ${uiLangLine()}
 ${JSON_RULES}
 Format: [{"store":"Store name","items":[{"name":"Item","price":1234,"desc":"short description"}]}]`;
-    return await socialGenArray(prompt, { app: 'shop', maxTokens: 2048, prefill: '[{"store":"' });
+    return await socialGenArray(prompt, { app: 'shop', maxTokens: 2048, prefill: '[{"store":"', requireItems: true, manualTask: true });
 }
 
 // ── Спам/мошенники: одно скам-смс под сеттинг ──
@@ -2188,26 +2197,30 @@ Format: [{"author":"nick","text":"..."}]`;
 // ── Курьер: кто везёт заказ и переписка с ним в приложении магазина ──
 // Имя не берём из готового списка — курьер должен быть из того же мира,
 // что и ролевая (страна, язык, реалии).
-export async function generateCourier(order, left, packing = false) {
+export async function generateCourier(order, left, packing = false, manualTask = false) {
     requirePhoneApp('shop');
     const items = (order.items || [{ name: order.item }]).map(x => x.name).join(', ');
     const firstMsg = packing
         ? 'their FIRST message to the customer: they have been assigned to this order and are waiting for the store to pack it'
         : 'their FIRST message to the customer: they picked the order up and are on the way';
-    const prompt = `${await taskHeader(`invent the courier delivering ${getUserName()}'s order and their first message in the delivery app chat.`)}
+    // A courier needs the order and short setting context, not 40 RP turns,
+    // all character cards, or an entire lorebook.
+    const prompt = `${await taskHeader(`invent the courier delivering ${getUserName()}'s order and their first message in the delivery app chat.`, { brief: true, manualTask })}
 Order: ${items} — from «${order.store}». ${packing ? 'The store is still packing it.' : ''} Delivery in about ${left}.
 Invent the courier: a real person of this setting (name as it would show in a delivery app — usually first name, sometimes with surname initial) and ${firstMsg}.
 VOICE: 1–2 hurried, natural chat sentences with a distinct individual register; no literary narration or call-centre boilerplate. Do not infer accent or grammatical errors from the person’s name or nationality.
 ${uiLangLine()}
 ${JSON_RULES}
 Format: [{"name":"courier name","text":"first message"}]`;
-    const arr = await socialGenArray(prompt, { app: 'shop', maxTokens: 400, prefill: '[{"name":"' });
+    const arr = await socialGenArray(prompt, { app: 'shop', maxTokens: 400, prefill: '[{"name":"', requireItems: true, manualTask });
     const c = Array.isArray(arr) ? arr[0] : null;
-    if (!c || !c.name) throw new Error('Курьер не назначился — попробуй ещё раз');
-    return { name: String(c.name).slice(0, 40), text: String(c.text || '').slice(0, 300) };
+    if (!c || !String(c.name || '').trim() || !String(c.text || '').trim()) {
+        throw new Error('Courier generation returned an incomplete introduction. Tap Retry courier.');
+    }
+    return { name: String(c.name).trim().slice(0, 40), text: String(c.text).trim().slice(0, 300) };
 }
 
-export async function generateCourierReply(order, courier, history = [], userText = '', arrived = false) {
+export async function generateCourierReply(order, courier, history = [], userText = '', arrived = false, manualTask = false) {
     requirePhoneApp('shop');
     const items = (order.items || [{ name: order.item }]).map(x => x.name).join(', ');
     const ex = history.slice(-8).map(x => `${x.user ? getUserName() : courier.name}: ${x.text}`).join('\n');
@@ -2221,9 +2234,9 @@ One short message (1–2 sentences), preserving this courier’s established spe
 ${uiLangLine()}
 ${JSON_RULES}
 Format: [{"text":"..."}]`;
-    const arr = await socialGenArray(prompt, { app: 'shop', maxTokens: 300, prefill: '[{"text":"' });
+    const arr = await socialGenArray(prompt, { app: 'shop', maxTokens: 300, prefill: '[{"text":"', requireItems: true, manualTask });
     const t = Array.isArray(arr) && arr[0] ? String(arr[0].text || '').slice(0, 300) : '';
-    if (!t) throw new Error('Курьер не отвечает — попробуй ещё раз');
+    if (!t) throw new Error('The courier reply was empty. Tap Retry reply.');
     return t;
 }
 

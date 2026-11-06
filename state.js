@@ -13,7 +13,7 @@ import { cleanContactName, contactNameKey, redirectedContactKey, resolveIdentity
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.57.6';
+export const GP_VERSION = '2.58.0';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -73,6 +73,9 @@ const defaultSettings = () => ({
     imageGenBlockKey: '',
     // Верхний лимит ответа. 0 = бюджет задачи; короткие задачи не раздуваются.
     socialMaxTokens: 0,
+    // Extra OUTPUT room for reasoning/thinking models. 0 restores the original
+    // small per-task budgets. This does not increase prompt/history length.
+    socialThinkingHeadroom: 4096,
     // Квадрат 1:1 для инста-постов
     imageGenSquare: true,
     // Промпт-префикс картинок (стиль/кадр). Описание поста и запрет рисовать
