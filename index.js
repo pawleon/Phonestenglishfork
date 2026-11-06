@@ -56,14 +56,15 @@ function setupSettingsPanel() {
             <label><input type="checkbox" id="gp-set-enabled" ${s.isEnabled ? 'checked' : ''}><span>Включено</span></label>
             <label><input type="checkbox" id="gp-set-fab" ${s.showFab ? 'checked' : ''}><span>Плавающая кнопка</span></label>
             <label><input type="checkbox" id="gp-set-inject" ${s.injectPrompt ? 'checked' : ''}><span>Инструкции для модели</span></label>
-            <label><input type="checkbox" id="gp-set-quiet" ${s.quietMode ? 'checked' : ''}><span>Без звука<small class="gp-quiet-hint">Пауза входящих · банк и календарь работают</small></span></label>
+            <label><input type="checkbox" id="gp-set-quiet" ${s.quietMode ? 'checked' : ''}><span>Quiet Mode<small class="gp-quiet-hint">Automatic incoming activity paused; manual shop actions still work</small></span></label>
         </div>
 
         <details class="gp-settings-group">
             <summary><i class="fa-solid fa-layer-group"></i><span><b>Модель и контекст</b><small>Профиль, история и параметры ответа</small></span><i class="fa-solid fa-chevron-down gp-settings-chevron"></i></summary>
             <div class="gp-settings-group-body gp-settings-grid">
                 <label class="gp-settings-field"><span>Глубина инжекта</span><input type="number" id="gp-set-depth" class="text_pole gp-settings-number" min="0" max="100" step="1" value="${Math.max(0, Number(s.injectDepth) || 0)}"><small>0 — перед последним ходом</small></label>
-                <label class="gp-settings-field"><span>Макс. длина ответа</span><input type="number" id="gp-set-maxtokens" class="text_pole gp-settings-number" min="0" max="32000" step="256" value="${s.socialMaxTokens || 0}"><small>Верхняя граница; 0 = автоматически по задаче</small></label>
+                <label class="gp-settings-field"><span>Max response length</span><input type="number" id="gp-set-maxtokens" class="text_pole gp-settings-number" min="0" max="32000" step="256" value="${s.socialMaxTokens || 0}"><small>Upper limit, 0 = task-specific. This is not the main chat's API maximum.</small></label>
+                <label class="gp-settings-field"><span>Thinking-model output headroom</span><input type="number" id="gp-set-thinking-headroom" class="text_pole gp-settings-number" min="0" max="16000" step="256" value="${s.socialThinkingHeadroom ?? 4096}"><small>Extra output tokens for reasoning. 0 = original small budgets. More tokens may cost more.</small></label>
                 <label class="gp-settings-field gp-settings-wide"><span>Профиль генерации телефона</span><span class="gp-settings-control-row"><select id="gp-set-profile" class="text_pole"></select><button class="menu_button gp-settings-icon-button" id="gp-profile-test" type="button" title="Проверить профиль (маленький запрос)" aria-label="Проверить профиль (маленький запрос)"><i class="fa-solid fa-plug-circle-check"></i></button></span><small>SMS, Direct, звонки и соцсети. Без выбранного профиля — текущий API.</small></label>
                 <label class="gp-settings-field"><span>Контекст соцсетей</span><select id="gp-set-ctxmode" class="text_pole"><option value="rich" ${s.socialContextMode !== 'lite' ? 'selected' : ''}>История + лорбук + карточка бота</option><option value="lite" ${s.socialContextMode === 'lite' ? 'selected' : ''}>Только срез истории</option></select><small>SMS, Direct и звонки всегда получают карточку, лорбук и историю ролевой. Чужие переписки исключены.</small></label>
                 <label class="gp-settings-field"><span>Твой ник (@)</span><input type="text" id="gp-set-handle" class="text_pole" maxlength="21" placeholder="авто из имени"></label>
@@ -271,14 +272,35 @@ function setupSettingsPanel() {
         saveSettingsDebounced();
         applyChatHiding();
     });
-    // Ник юзера хранится per-chat (в метаданных) — подставляем при открытии панели
-    try { $('#gp-set-handle').val(getUserHandle().replace(/^@/, '')); } catch (e) { /* чат ещё не загружен */ }
+    // Per-chat handle: never save a field that belongs to a previous chat.
+    let handleInputOwner = null;
+    const syncHandleInput = () => {
+        const el = document.getElementById('gp-set-handle');
+        if (!el) return;
+        try {
+            const owner = getMeta();
+            el.value = getUserHandle().replace(/^@/, '');
+            handleInputOwner = owner;
+        } catch (error) { /* Chat is still loading. */ }
+    };
+    syncHandleInput();
+    $('#gp-set-handle').on('focus', syncHandleInput);
     $('#gp-set-handle').on('change', function () {
+        if (handleInputOwner !== getMeta()) {
+            syncHandleInput(); // A chat changed while the input was active.
+            return;
+        }
         setUserHandle(this.value);
         updatePhoneInjection();
     });
     $('#gp-set-maxtokens').on('change', function () {
         getSettings().socialMaxTokens = Math.max(0, Math.min(32000, parseInt(this.value) || 0));
+        saveSettingsDebounced();
+    });
+    $('#gp-set-thinking-headroom').on('change', function () {
+        const amount = Math.max(0, Math.min(16000, parseInt(this.value) || 0));
+        this.value = amount;
+        getSettings().socialThinkingHeadroom = amount;
         saveSettingsDebounced();
     });
     $('#gp-set-imgmodel').on('change', function () {
@@ -625,6 +647,9 @@ jQuery(async () => {
                 clearTimeout(instagramJournalTimer);
                 invalidateChatCache();
                 refreshPhoneImageBlocks();
+                // Immediate refresh when metadata is already available, followed by
+                // a reconciliation after SillyTavern finishes switching chats.
+                queueMicrotask(syncHandleInput);
                 setTimeout(() => {
                     invalidateChatCache();
                     resetIncomingCounters();
@@ -636,8 +661,8 @@ jQuery(async () => {
                     updateFabBadge();
                     updatePhoneInjection();
                     applyChatHiding();
-                    // Ник юзера per-chat — обновляем поле в настройках
-                    try { $('#gp-set-handle').val(getUserHandle().replace(/^@/, '')); } catch (e) { /* ignore */ }
+                    // Always resolve the active chat's own handle, never the previous input value.
+                    syncHandleInput();
                     if (isPhoneOpen()) render();
                 }, 150);
             });

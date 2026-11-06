@@ -16,13 +16,14 @@ let catalog;
 export function getCurrencies() {
     if (catalog) return catalog;
     let names;
-    try { names = new Intl.DisplayNames(['ru'], { type:'currency' }); } catch { /* English fallback below. */ }
+    // Display names follow the English phone UI, rather than forcing Russian.
+    try { names = new Intl.DisplayNames(['en'], { type:'currency' }); } catch { /* ISO fallback below. */ }
     catalog = ISO_CURRENCIES.map(([code, minor, englishName]) => {
         let localized;
         try { localized = names?.of(code); } catch { /* Unknown code in an older browser. */ }
-        const name = RU_NAMES[code] || (localized && localized !== code ? localized : englishName);
+        const name = localized && localized !== code ? localized : englishName;
         return { code, minor, name:name.charAt(0).toUpperCase() + name.slice(1), englishName, symbol:SYMBOLS[code] || code, special:SPECIAL_CODES.has(code) };
-    }).sort((a,b) => Number(a.special) - Number(b.special) || a.name.localeCompare(b.name, 'ru'));
+    }).sort((a,b) => Number(a.special) - Number(b.special) || a.name.localeCompare(b.name, 'en'));
     return catalog;
 }
 

@@ -2295,25 +2295,28 @@ export function tr(s) {
 const ATTRS = ['placeholder', 'title', 'aria-label', 'alt'];
 const CYR = /[А-ЯЁа-яё]/;
 
+function translateTextNode(node, en) {
+    const parent = node.parentElement;
+    if (!parent || parent.tagName === 'SCRIPT' || parent.tagName === 'STYLE' || parent.tagName === 'TEXTAREA') return;
+    const cur = node.nodeValue;
+    if (node.__gpRu === undefined || (node.__gpEn !== undefined && cur !== node.__gpEn && cur !== node.__gpRu)) {
+        if (!en || !CYR.test(cur)) { node.__gpRu = undefined; node.__gpEn = undefined; return; }
+        node.__gpRu = cur;
+    }
+    const next = en ? tr(node.__gpRu) : node.__gpRu;
+    node.__gpEn = next;
+    if (cur !== next) node.nodeValue = next;
+}
 export function trDom(root) {
     if (!root) return;
-    if (root.nodeType === 3) root = root.parentElement;
-    if (!root) return;
     const en = lang() === 'en';
+    // Text mutations are common during typing and AI streaming. Never rescan
+    // the entire parent/subtree for a single changed text node.
+    if (root.nodeType === 3) { translateTextNode(root, en); return; }
+    if (root.nodeType !== 1 && root.nodeType !== 11) return;
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
     let node;
-    while ((node = walker.nextNode())) {
-        const parent = node.parentElement;
-        if (!parent || parent.tagName === 'SCRIPT' || parent.tagName === 'STYLE' || parent.tagName === 'TEXTAREA') continue;
-        const cur = node.nodeValue;
-        if (node.__gpRu === undefined || (node.__gpEn !== undefined && cur !== node.__gpEn && cur !== node.__gpRu)) {
-            if (!en || !CYR.test(cur)) { node.__gpRu = undefined; node.__gpEn = undefined; continue; }
-            node.__gpRu = cur;
-        }
-        const next = en ? tr(node.__gpRu) : node.__gpRu;
-        node.__gpEn = next;
-        if (cur !== next) node.nodeValue = next;
-    }
+    while ((node = walker.nextNode())) translateTextNode(node, en);
     const els = [root, ...root.querySelectorAll('*')];
     for (const el of els) {
         if (!el.getAttribute) continue;

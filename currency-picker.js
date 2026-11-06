@@ -11,20 +11,20 @@ const SEARCH_ALIASES = { JPY:'япония японские иены йены й
 export function openCurrencyPicker(host, onSave) {
     const from = currencyInfo(getBank().currency);
     let selected = from.code;
-    const shade = openPhoneSheet(host, 'Валюта банка', `
+    const shade = openPhoneSheet(host, 'Account currency', `
         <div class="gp-currency-body">
-            <label class="gp-currency-search">${bankIcon('Search')}<input type="search" placeholder="Название, код или символ" aria-label="Найти валюту" autocomplete="off" data-currency-search></label>
-            <div class="gp-currency-list" aria-label="Валюты" data-currency-list></div>
-            <p class="gp-currency-empty" data-currency-empty hidden>Ничего не найдено</p>
-            <details class="gp-currency-custom"><summary>Своя валюта</summary><label>Название или символ<input type="text" maxlength="12" placeholder="Например, кредиты" data-currency-custom></label></details>
+            <label class="gp-currency-search">${bankIcon('Search')}<input type="search" placeholder="Name, code or symbol" aria-label="Find a currency" autocomplete="off" data-currency-search></label>
+            <div class="gp-currency-list" aria-label="Currencies" data-currency-list></div>
+            <p class="gp-currency-empty" data-currency-empty hidden>No currencies found</p>
+            <details class="gp-currency-custom"><summary>Custom currency</summary><label>Name or symbol<input type="text" maxlength="12" placeholder="e.g. Credits" data-currency-custom></label></details>
         </div>
         <form class="gp-currency-footer" data-currency-form>
             <b data-currency-choice></b>
-            <label class="gp-currency-convert"><input type="checkbox" data-currency-convert> Пересчитать суммы по курсу</label>
-            <label class="gp-currency-rate" data-currency-rate-row hidden><span data-currency-rate-label></span><input type="number" inputmode="decimal" min="0" step="any" placeholder="Курс" data-currency-rate></label>
-            <p data-currency-hint>Числа останутся прежними. Для пересчёта укажи свой курс.</p>
+            <label class="gp-currency-convert"><input type="checkbox" data-currency-convert> Convert amounts at a chosen rate</label>
+            <label class="gp-currency-rate" data-currency-rate-row hidden><span data-currency-rate-label></span><input type="number" inputmode="decimal" min="0" step="any" placeholder="Exchange rate" data-currency-rate></label>
+            <p data-currency-hint>Amounts will stay unchanged. Enter a rate to convert them.</p>
             <p class="gp-currency-error" role="alert" data-currency-error hidden></p>
-            <button type="submit" class="gp-primary">Применить</button>
+            <button type="submit" class="gp-primary">Apply</button>
         </form>`, 'bank');
     shade.classList.add('gp-currency-shade');
     shade.querySelector('[data-sheet-close]').innerHTML = bankIcon('X');
@@ -34,7 +34,7 @@ export function openCurrencyPicker(host, onSave) {
     for (const item of getCurrencies()) {
         if (item.special && !specialHeading) {
             specialHeading = document.createElement('div');
-            specialHeading.className = 'gp-currency-group'; specialHeading.textContent = 'Металлы и расчётные единицы';
+            specialHeading.className = 'gp-currency-group'; specialHeading.textContent = 'Metals and accounting units';
             list.append(specialHeading);
         }
         const row = document.createElement('button');
@@ -58,8 +58,8 @@ export function openCurrencyPicker(host, onSave) {
         shade.querySelector('[data-currency-rate-row]').hidden = !changing || !convert.checked;
         rate.required = changing && convert.checked;
         shade.querySelector('[data-currency-hint]').textContent = changing && convert.checked
-            ? 'Пересчитаются баланс, операции, кредиты, платежи и цены магазина.'
-            : 'Числа останутся прежними. Для пересчёта укажи свой курс.';
+            ? 'The balance, transactions, loans, payments, and shop prices will be converted.'
+            : 'Amounts will stay unchanged. Enter a rate to convert them.';
         for (const { row } of rows) row.setAttribute('aria-pressed', String(row.dataset.code === selected));
     }
     list.onclick = event => {
@@ -82,11 +82,11 @@ export function openCurrencyPicker(host, onSave) {
         if (shade.ownerRoot !== getMeta()) { closePhoneSheet(shade); return; }
         const factor = convert.checked && !convert.disabled ? Number(rate.value) : null;
         if (factor !== null && (!Number.isFinite(factor) || factor <= 0)) {
-            error.textContent = 'Укажи курс больше нуля'; error.hidden = false; rate.focus(); return;
+            error.textContent = 'Enter an exchange rate greater than zero'; error.hidden = false; rate.focus(); return;
         }
         let result;
         try { result = convertCurrency(selected, { factor }); } catch {
-            error.textContent = 'Этот курс даёт слишком большую сумму. Уменьши его.'; error.hidden = false;
+            error.textContent = 'That rate produces an amount that is too large. Use a lower rate.'; error.hidden = false;
             return;
         }
         closePhoneSheet(shade); onSave?.(result);

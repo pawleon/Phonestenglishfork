@@ -51,7 +51,7 @@ import { phoneMessageSources, replacePhoneMessageTag } from './message-sources.j
 import { roleplaySmsKey } from './roleplay-sms.js';
 import { updatePhoneInjection } from './prompts.js';
 import { getBank, fmtMoney, addTransaction, getBankReminders, bankBadgeCount, harvestBankTags } from './bank.js';
-import { getShop, catById, getCategory, generateCategory, buyItem, findShopItem, getOrders, deleteOrder, advanceOrders, orderLeft, fmtEta, findOrder, ensureCourier, orderChat, courierUnread, markCourierRead, writeToCourier, courierArrived } from './shop.js';
+import { getShop, catById, getCategory, generateCategory, buyItem, findShopItem, getOrders, deleteOrder, advanceOrders, orderLeft, fmtEta, findOrder, ensureCourier, orderChat, courierUnread, markCourierRead, writeToCourier, retryCourierReply, courierArrived } from './shop.js';
 import {
     getTweets, getIgPosts, postTweet, likeTweet, rtTweet, delTweet, addTweetReply, delTweetReply,
     postIg, likeIg, delIg, addIgComment, delIgComment,
@@ -1313,7 +1313,7 @@ function lockNotifications() {
             const last = orderChat(o).filter(m => !m.user).slice(-1)[0];
             out.push({
                 icon: 'fa-truck-fast',
-                title: o.courier?.name || 'Курьер',
+                title: o.courier?.name || 'Courier',
                 text: last?.text || '',
                 count: n,
                 go: () => { _ordChatId = o.id; goto('ordchat'); },
@@ -4103,21 +4103,23 @@ function renderCourierChat(screen) {
     if (!o.courier && !_courierBusy && !_courierTried.has(o.id)) {
         _courierTried.add(o.id);
         _courierBusy = true;
-        ensureCourier(o.id)
-            .catch(e => toast(String(e?.message || e).slice(0, 60), 'fa-circle-exclamation'))
+        ensureCourier(o.id, { userInitiated: true })
+            .catch(e => toast(String(e?.message || e).slice(0, 110), 'fa-circle-exclamation'))
             .finally(() => { _courierBusy = false; if (isPhoneOpen()) render(); });
     }
     const assigning = !o.courier && _courierBusy;
-    const name = o.courier?.name || (assigning ? 'Назначаем курьера...' : 'Курьер');
+    const name = o.courier?.name || (assigning ? 'Assigning a courier...' : 'Courier');
     const bubbles = orderChat(o).map(m => `
         <div class="gp-bubble-wrap ${m.user ? 'gp-out' : 'gp-in'}">
             <div class="gp-bubble">${esc(m.text)}</div>
         </div>`).join('');
     const empty = assigning
-        ? `<div class="gp-empty gp-empty-thread"><div class="gp-empty-icon">${ic('fa-spinner fa-spin')}</div><div class="gp-empty-text">Магазин ищет курьера</div></div>`
-        : `<div class="gp-empty gp-empty-thread"><div class="gp-empty-icon">${ic('fa-truck-fast')}</div><div class="gp-empty-text">Напиши курьеру — он ответит</div></div>`;
+        ? `<div class="gp-empty gp-empty-thread"><div class="gp-empty-icon">${ic('fa-spinner fa-spin')}</div><div class="gp-empty-text">The store is finding a courier</div></div>`
+        : `<div class="gp-empty gp-empty-thread"><div class="gp-empty-icon">${ic('fa-truck-fast')}</div>
+            <div class="gp-empty-text">${o.courier ? 'Text the courier and they will reply' : 'The courier has not been assigned yet.'}</div>
+            ${!o.courier ? '<button type="button" id="gp-retry-courier" class="gp-primary">Retry courier</button>' : ''}</div>`;
     const sub = o.stage === 'done'
-        ? 'заказ доставлен'
+        ? 'order delivered'
         : `${orderItems(o).map(x => x.name).join(', ')} · ${fmtEta(orderLeft(o))}`;
     setHtmlKeepScroll(screen, '.gp-msgs', `
         <div class="gp-header gp-thread-header">
@@ -4131,16 +4133,35 @@ function renderCourierChat(screen) {
         </div>
         <div class="gp-msgs" id="gp-msgs">
             ${bubbles || empty}
+            ${o.courier && orderChat(o).at(-1)?.user && !_courierBusy
+                ? '<button type="button" id="gp-retry-courier-reply" class="gp-primary">Retry courier reply</button>' : ''}
             ${_courierBusy ? `<div class="gp-bubble-wrap gp-in gp-typing-wrap"><div class="gp-bubble gp-typing"><span></span><span></span><span></span></div></div>` : ''}
         </div>
         <div class="gp-inputbar">
-            <textarea id="gp-ord-input" rows="1" placeholder="Сообщение курьеру..."></textarea>
-            <button class="gp-send" id="gp-ord-send" ${_courierBusy ? 'disabled' : ''}>${ic('fa-paper-plane')}</button>
+            <textarea id="gp-ord-input" rows="1" placeholder="Message the courier..." ${!o.courier ? 'disabled' : ''}></textarea>
+            <button class="gp-send" id="gp-ord-send" ${_courierBusy || !o.courier ? 'disabled' : ''}>${ic('fa-paper-plane')}</button>
         </div>`);
 
     const msgs = screen.querySelector('#gp-msgs');
     if (msgs) msgs.scrollTop = msgs.scrollHeight;
     screen.querySelector('#gp-back')?.addEventListener('click', () => goto('shoporders'));
+    screen.querySelector('#gp-retry-courier')?.addEventListener('click', async () => {
+        if (_courierBusy) return;
+        _courierBusy = true;
+        _courierTried.add(o.id);
+        render();
+        try { await ensureCourier(o.id, { userInitiated: true }); }
+        catch (e) { toast(String(e?.message || e).slice(0, 110), 'fa-circle-exclamation'); }
+        finally { _courierBusy = false; if (isPhoneOpen()) render(); }
+    });
+    screen.querySelector('#gp-retry-courier-reply')?.addEventListener('click', async () => {
+        if (_courierBusy) return;
+        _courierBusy = true;
+        render();
+        try { await retryCourierReply(o.id); }
+        catch (e) { toast(String(e?.message || e).slice(0, 110), 'fa-circle-exclamation'); }
+        finally { _courierBusy = false; if (isPhoneOpen()) render(); }
+    });
 
     const send = async () => {
         const input = screen.querySelector('#gp-ord-input');
@@ -4228,16 +4249,16 @@ export function notifyDeliveries() {
         for (const { order, stage } of advanceOrders()) {
             if (getSettings().quietMode) continue;
             if (stage === 'way') {
-                toast(`Курьер в пути: ${order.item} · ${fmtEta(orderLeft(order))}`, 'fa-truck-fast');
+                toast(`Courier on the way: ${order.item} · ${fmtEta(orderLeft(order))}`, 'fa-truck-fast');
                 // Курьера придумываем только сейчас: до выезда его нет.
                 // Фоном — уведомление не должно ждать модель.
                 ensureCourier(order.id).then(c => {
                     if (!c) return;
-                    toast(`Заказ везёт ${c.name}`, 'fa-user');
+                    toast(`Your order is being delivered by ${c.name}`, 'fa-user');
                     if (isPhoneOpen()) render();
                 }).catch(e => logFail('курьер', String(e?.message || e)));
             } else if (stage === 'done') {
-                toast(`Заказ доставлен: ${order.item}`, 'fa-box-open');
+                toast(`Order delivered: ${order.item}`, 'fa-box-open');
                 if (order.courier) {
                     courierArrived(order.id).then(() => { if (isPhoneOpen()) render(); })
                         .catch(e => logFail('курьер у двери', String(e?.message || e)));

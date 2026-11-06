@@ -5821,3 +5821,23 @@ img[data-zoom] { cursor: zoom-in; }
 #gp-phone:has(.gp-thread-float) #gp-input{border:0;box-shadow:none;outline:0}
 #gp-phone:has(.gp-thread-float) #gp-input:focus-visible{outline:1px solid rgba(var(--gp-accent-a-rgb),.45);outline-offset:2px}
 #gp-phone #gp-msgs .gp-bubble-wrap.gp-out>.gp-bubble.gp-sticker-bubble,#gp-phone #gp-msgs .gp-bubble-wrap.gp-in>.gp-bubble.gp-sticker-bubble{background:transparent!important;background-image:none!important;border:0!important;box-shadow:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;padding:0!important}
+
+/* English fork 2.58: narrow-phone overflow safeguards without changing skins. */
+#gp-phone .gp-currency-row > span:nth-child(2),
+#gp-phone .gp-thread-title { min-width: 0; }
+#gp-phone .gp-currency-row b,
+#gp-phone .gp-thread-number { overflow-wrap: anywhere; }
+#gp-phone .gp-inputbar textarea,
+#gp-phone .gp-currency-search input,
+#gp-phone .gp-currency-custom input,
+#gp-phone .gp-currency-rate input { min-width: 0; max-width: 100%; box-sizing: border-box; }
+@media (max-width: 380px) {
+    #gp-phone .gp-currency-shade > .gp-web-sheet {
+        max-width: 100%; padding-inline: 12px; box-sizing: border-box;
+    }
+    #gp-phone .gp-currency-row { gap: 7px; }
+    #gp-phone .gp-currency-symbol { flex: 0 0 auto; }
+    #gp-phone .gp-thread-header { min-width: 0; }
+    #gp-phone .gp-thread-title { flex: 1 1 auto; }
+    #gp-phone .gp-inputbar { min-width: 0; }
+}
